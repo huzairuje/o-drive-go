@@ -68,6 +68,7 @@ func (s *Server) routes() {
 	// Files
 	s.mux.HandleFunc("GET /api/v1/files", s.handler.ListFiles)
 	s.mux.HandleFunc("POST /api/v1/files/upload", s.handler.UploadFile)
+	s.mux.HandleFunc("POST /api/v1/folders", s.handler.CreateFolder)
 	s.mux.HandleFunc("GET /api/v1/files/download", s.handler.DownloadFile)
 	s.mux.HandleFunc("GET /api/v1/files/download/", s.handler.DownloadFile)
 	s.mux.HandleFunc("DELETE /api/v1/files/", s.handler.DeleteFile)

@@ -340,10 +340,17 @@ func (h *APIHandler) UploadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	filePath := r.URL.Query().Get("path")
+	if filePath == "" {
+		filePath = "/" + fileName
+	} else if !strings.HasPrefix(filePath, "/") {
+		filePath = "/" + filePath
+	}
+
 	meta.ID = uuid.NewString()
 	meta.DriveID = drive.ID
 	meta.ParentID = parentID
-	meta.Path = "/" + fileName
+	meta.Path = filePath
 	_ = h.store.SaveFile(ctx, meta)
 
 	user := UserFromContext(ctx)
@@ -370,6 +377,62 @@ func (h *APIHandler) UploadFile(w http.ResponseWriter, r *http.Request) {
 		Status:    "completed",
 		Progress:  100,
 	})
+
+	jsonResponse(w, http.StatusCreated, meta)
+}
+
+func (h *APIHandler) CreateFolder(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		DriveID  string `json:"drive_id"`
+		ParentID string `json:"parent_id"`
+		Name     string `json:"name"`
+		Path     string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if req.DriveID == "" || req.Name == "" {
+		jsonError(w, http.StatusBadRequest, "drive_id and name are required")
+		return
+	}
+
+	ctx := r.Context()
+	drive, err := h.store.GetDrive(ctx, req.DriveID)
+	if err != nil {
+		jsonError(w, http.StatusNotFound, "drive not found")
+		return
+	}
+
+	prov, err := h.registry.GetProvider(ctx, drive.ConnectionID)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "provider unavailable: "+err.Error())
+		return
+	}
+
+	parentID := req.ParentID
+	if parentID == "" {
+		parentID = drive.RootFolderID
+	}
+
+	meta, err := prov.CreateFolder(ctx, parentID, req.Name)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "create folder failed: "+err.Error())
+		return
+	}
+
+	folderPath := req.Path
+	if folderPath == "" {
+		folderPath = "/" + req.Name
+	} else if !strings.HasPrefix(folderPath, "/") {
+		folderPath = "/" + folderPath
+	}
+
+	meta.ID = uuid.NewString()
+	meta.DriveID = drive.ID
+	meta.ParentID = parentID
+	meta.Path = folderPath
+	_ = h.store.SaveFile(ctx, meta)
 
 	jsonResponse(w, http.StatusCreated, meta)
 }
