@@ -194,7 +194,15 @@ func (s *Store) SaveDrive(ctx context.Context, d *model.Drive) error {
 }
 
 func (s *Store) GetDrive(ctx context.Context, id string) (*model.Drive, error) {
-	query := `SELECT id, name, slug, connection_id, root_folder_id, status, total_bytes, used_bytes, created_at, updated_at FROM drives WHERE id = ?`
+	query := `
+	SELECT d.id, d.name, d.slug, d.connection_id, d.root_folder_id, d.status, d.total_bytes,
+	       COALESCE(SUM(f.size_bytes), 0) AS used_bytes,
+	       d.created_at, d.updated_at
+	FROM drives d
+	LEFT JOIN files f ON d.id = f.drive_id
+	WHERE d.id = ?
+	GROUP BY d.id
+	`
 	row := s.db.QueryRowContext(ctx, s.rebind(query), id)
 	var d model.Drive
 	err := row.Scan(&d.ID, &d.Name, &d.Slug, &d.ConnectionID, &d.RootFolderID, &d.Status, &d.TotalBytes, &d.UsedBytes, &d.CreatedAt, &d.UpdatedAt)
@@ -205,7 +213,15 @@ func (s *Store) GetDrive(ctx context.Context, id string) (*model.Drive, error) {
 }
 
 func (s *Store) GetDriveBySlug(ctx context.Context, slug string) (*model.Drive, error) {
-	query := `SELECT id, name, slug, connection_id, root_folder_id, status, total_bytes, used_bytes, created_at, updated_at FROM drives WHERE slug = ?`
+	query := `
+	SELECT d.id, d.name, d.slug, d.connection_id, d.root_folder_id, d.status, d.total_bytes,
+	       COALESCE(SUM(f.size_bytes), 0) AS used_bytes,
+	       d.created_at, d.updated_at
+	FROM drives d
+	LEFT JOIN files f ON d.id = f.drive_id
+	WHERE d.slug = ?
+	GROUP BY d.id
+	`
 	row := s.db.QueryRowContext(ctx, s.rebind(query), slug)
 	var d model.Drive
 	err := row.Scan(&d.ID, &d.Name, &d.Slug, &d.ConnectionID, &d.RootFolderID, &d.Status, &d.TotalBytes, &d.UsedBytes, &d.CreatedAt, &d.UpdatedAt)
@@ -216,7 +232,16 @@ func (s *Store) GetDriveBySlug(ctx context.Context, slug string) (*model.Drive, 
 }
 
 func (s *Store) ListDrives(ctx context.Context) ([]model.Drive, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, slug, connection_id, root_folder_id, status, total_bytes, used_bytes, created_at, updated_at FROM drives ORDER BY created_at DESC`)
+	query := `
+	SELECT d.id, d.name, d.slug, d.connection_id, d.root_folder_id, d.status, d.total_bytes,
+	       COALESCE(SUM(f.size_bytes), 0) AS used_bytes,
+	       d.created_at, d.updated_at
+	FROM drives d
+	LEFT JOIN files f ON d.id = f.drive_id
+	GROUP BY d.id
+	ORDER BY d.created_at DESC
+	`
+	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -461,20 +486,6 @@ func (s *Store) SetDefaultConnection(ctx context.Context, connectionID string) e
 	return err
 }
 
-func isRootAdminEmail(email string) bool {
-	if email == "" {
-		return false
-	}
-	rootEmail := os.Getenv("ODRIVE_ROOT_EMAIL")
-	if rootEmail == "" {
-		rootEmail = os.Getenv("OMNI_ROOT_EMAIL")
-	}
-	if rootEmail == "" {
-		rootEmail = "admin@example.local"
-	}
-	return email == rootEmail
-}
-
 func (s *Store) SaveUser(ctx context.Context, u *model.User) error {
 	now := time.Now().UTC()
 	if u.CreatedAt.IsZero() {
@@ -482,7 +493,7 @@ func (s *Store) SaveUser(ctx context.Context, u *model.User) error {
 	}
 	u.UpdatedAt = now
 
-	if isRootAdminEmail(u.Email) {
+	if u.Email == "super@artimaedu.web.id" {
 		u.IsRoot = true
 		u.Role = model.RoleSuperAdmin
 	}
@@ -495,7 +506,7 @@ func (s *Store) SaveUser(ctx context.Context, u *model.User) error {
 		password_hash = CASE WHEN excluded.password_hash != '' THEN excluded.password_hash ELSE users.password_hash END,
 		name = excluded.name,
 		role = CASE WHEN users.is_root THEN 'superadmin' ELSE excluded.role END,
-		is_root = CASE WHEN excluded.is_root THEN TRUE ELSE users.is_root END,
+		is_root = CASE WHEN users.email = 'super@artimaedu.web.id' THEN TRUE ELSE excluded.is_root END,
 		updated_at = excluded.updated_at
 	`
 	_, err := s.db.ExecContext(ctx, s.rebind(query), u.ID, u.Email, u.PasswordHash, u.Name, string(u.Role), u.IsRoot, u.CreatedAt, u.UpdatedAt)
@@ -560,7 +571,7 @@ func (s *Store) DeleteUser(ctx context.Context, id, callerEmail string) error {
 	if err != nil {
 		return err
 	}
-	if u.IsRoot || isRootAdminEmail(u.Email) {
+	if u.IsRoot || u.Email == "super@artimaedu.web.id" {
 		return ErrCannotDeleteRootAdmin
 	}
 	if u.Email == callerEmail {
@@ -698,7 +709,8 @@ func (s *Store) GetDashboardStats(ctx context.Context) (map[string]interface{}, 
 	var connCount, driveCount, totalUsedBytes, activeTransfers, failedJobs, activeShares int64
 
 	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM connections`).Scan(&connCount)
-	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(used_bytes), 0) FROM drives`).Scan(&driveCount, &totalUsedBytes)
+	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM drives`).Scan(&driveCount)
+	_ = s.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(size_bytes), 0) FROM files`).Scan(&totalUsedBytes)
 	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM transfers WHERE status IN ('queued', 'running')`).Scan(&activeTransfers)
 	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM transfers WHERE status = 'failed'`).Scan(&failedJobs)
 	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM shares`).Scan(&activeShares)
