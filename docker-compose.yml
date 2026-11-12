@@ -1,0 +1,53 @@
+services:
+  odrive:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: odrive-server
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    environment:
+      - ODRIVE_SECRET_KEY=${ODRIVE_SECRET_KEY:-default-insecure-secret-change-in-production-32b}
+      - DATABASE_URL=${DATABASE_URL:-postgres://odrive:odrive_secret_password@postgres:5432/odrive?sslmode=disable}
+      - ODRIVE_ROOT_EMAIL=${ODRIVE_ROOT_EMAIL:-admin@example.local}
+      - ODRIVE_ROOT_PASSWORD=${ODRIVE_ROOT_PASSWORD:-admin123456}
+    volumes:
+      - odrive_data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - odrive_net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8090/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  postgres:
+    image: postgres:17-alpine
+    container_name: odrive-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-odrive}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-odrive_secret_password}
+      POSTGRES_DB: ${POSTGRES_DB:-odrive}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - odrive_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-odrive} -d ${POSTGRES_DB:-odrive}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  odrive_data:
+  postgres_data:
+
+networks:
+  odrive_net:
+    driver: bridge

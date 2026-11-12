@@ -1,604 +1,163 @@
-# ODrive
+# ODrive Go
 
-### Omni Drive — One interface for every storage.
+ODrive Go is an open-source cloud storage relay, streaming gateway, and unified virtual file system written in Go, featuring an embedded Next.js web management console.
 
-ODrive is a provider-agnostic storage management platform that brings multiple storage providers and multiple accounts into a single, unified interface.
+It unifies multiple upstream storage providers (Google Drive, Cloudflare R2, Amazon S3, and local storage) behind a single API surface, an S3-compatible gateway, and an administrative dashboard.
 
-Connect your Google Drive, OneDrive, Telegram, Cloudflare R2, Amazon S3, and other storage services — without making any provider the center of the architecture.
+## Key Capabilities
 
-ODrive is designed to be simple for users, modular for developers, and portable across infrastructure. New: already **[ODrive Connector](https://github.com/fa7ar/odrive-wp)** for WordPress integration. Join **[Vibe Circle](https://t.me/vibecircles)** group on Telegram
+- Unified Multi-Cloud Storage: Mount Google Drive personal/workspace accounts, Cloudflare R2, AWS S3 buckets, and local disks under unified virtual drive paths.
+- S3-Compatible Gateway: Standard HTTP PUT, GET, HEAD, and DELETE operations under `/s3/{bucket}/{key}` with zero-copy streaming.
+- Streaming Relay: Upload and download files without buffering full payloads into server RAM.
+- Byte-Range Streaming: Supports HTTP 206 Partial Content for video playback, media streaming, and resumable downloads.
+- Embedded Web Console: Modern Next.js interface embedded directly inside the compiled Go binary through `embed.FS`.
+- Zero External Runtime Dependencies: Runs as a single self-contained binary on Linux, macOS, and Windows.
+- Credential Security: Provider tokens, client secrets, and service account keys are encrypted at rest using AES-256-GCM.
+- Role-Based Access Control: Root superadmin protection, secondary admin roles, and granular per-service API keys.
+- Dual Database Engine: Native support for PostgreSQL in production and pure-Go SQLite for development or edge deployments.
 
----
+## Architecture
 
-## ✨ Why ODrive?
-
-Storage is fragmented.
-
-You may have:
-
-* Multiple Google Drive accounts
-* Multiple OneDrive accounts
-* Multiple Telegram accounts
-* Cloudflare R2 buckets
-* Amazon S3 buckets
-* Other storage providers
-
-ODrive provides one consistent interface for managing them.
-
-```text
-                    ODrive
-                       │
-                 ┌─────┴─────┐
-                 │   Drives  │
-                 └─────┬─────┘
-                       │
-              ┌────────┼────────┐
-              │        │        │
-          Google     OneDrive  Telegram
-           Drive
-              │        │        │
-          Account A  Account A Account A
-          Account B  Account B Account B
+```
+Downstream Clients and Apps
+  |
+  +--> Web Management UI (Embedded Next.js Console on :8090)
+  +--> REST API (/api/v1/files, /api/v1/drives, /api/v1/connections)
+  +--> S3 Gateway (/s3/{bucket}/{key})
+        |
+        v
+   ODrive Core Relay Engine (Go)
+        |
+        +--> AES-256-GCM Credential Vault
+        +--> Virtual File System (PostgreSQL / SQLite)
+        |
+        v
+   Upstream Storage Providers
+        +--> Google Drive (OAuth 2.0 / Service Account)
+        +--> Cloudflare R2
+        +--> Amazon S3
+        +--> Local / Mock Storage
 ```
 
-The user thinks in terms of **Drives and Files**.
+## Quick Start
 
-The system handles providers, connections, credentials, adapters, transfers, synchronization, and background jobs underneath.
+### 1. Run via Docker Compose (Recommended)
 
----
+Clone the repository and launch the container stack:
 
-# 🚀 Core Features
+```bash
+git clone git@github.com:huzairuje/o-drive-go.git
+cd o-drive-go
 
-## Multi-Provider
+# Copy environment template
+cp .env.example .env
 
-Connect different storage providers through one interface.
-
-Current provider availability:
-
-| Provider | Status | Notes |
-| --- | --- | --- |
-| Google Drive | Production | OAuth, file operations, health, and credential rotation are wired live. |
-| Cloudflare R2 | Production | S3-compatible upload, download, streaming, and health are wired live. |
-| Amazon S3 | Production | Upload, download, streaming, metadata, and health are wired live. |
-| OneDrive | Beta | Microsoft Graph adapter is live for OAuth-backed file operations and health. |
-| Telegram | Beta | Bot API adapter is live for document upload, recent document listing, download, and health. |
-
-Additional providers can be added through adapters.
-
----
-
-## Multi-Account
-
-ODrive treats multiple accounts from the same provider as first-class connections.
-
-For example:
-
-```text
-Google Drive
-
-├── Personal
-├── Work
-├── Client A
-└── Client B
+# Start ODrive and PostgreSQL
+docker compose up -d
 ```
 
-The same model applies to other providers.
+Open `http://localhost:8090` in your browser.
 
-Multi-account is **not an addon**.
+Default credentials:
+- Email: `admin@example.local`
+- Password: `replace-with-a-secure-password` (configured in `.env`)
 
-It is part of the core ODrive architecture.
+### 2. Run from Source
 
----
+Prerequisites:
+- Go 1.22 or higher
+- Node.js 18 or higher (only needed when rebuilding UI assets)
 
-# 🏗️ Architecture
+```bash
+# 1. Build Next.js UI and compile standalone binary
+./scripts/build.sh
 
-ODrive follows a layered, adapter-based architecture.
+# 2. Run with SQLite (zero configuration required)
+./bin/odrive -addr :8090 -db ./data/odrive.db
 
-```text
-                    Frontend
-                       │
-                       ▼
-                   API Layer
-                       │
-                       ▼
-                  ODrive Core
-                       │
-       ┌───────────────┼────────────────┐
-       │               │                │
-   Repository       Services         Domain
-       │
-       ▼
-   Adapters
-       │
- ┌─────┼─────┬─────────┬─────────┐
- │     │     │         │         │
- DB  Storage Auth     Queue    Secrets
- │     │     │         │         │
- ▼     ▼     ▼         ▼         ▼
-PG   Drive  Auth      Worker   Secret
-D1   R2     Provider   Queue    Store
-S3   S3
+# Or run with PostgreSQL
+./bin/odrive -addr :8090 -db "postgres://user:password@localhost:5432/odrive?sslmode=disable"
 ```
 
-The important principle is:
+## Configuration
 
-> **ODrive Core must not depend directly on infrastructure vendors.**
+All configuration can be set via environment variables or command-line flags.
 
----
+| Variable | Default | Description |
+|---|---|---|
+| `PORT` | `8090` | HTTP listen port |
+| `ODRIVE_SECRET_KEY` | - | 32-character master key used for AES-256-GCM credential encryption |
+| `DATABASE_URL` | - | PostgreSQL connection string or SQLite file path |
+| `ODRIVE_ROOT_EMAIL` | `admin@example.local` | Protected root superadmin email |
+| `ODRIVE_ROOT_PASSWORD` | auto-generated | Initial password for the root administrator |
+| `GDRIVE_CLIENT_ID` | - | Google Cloud OAuth 2.0 Client ID |
+| `GDRIVE_CLIENT_SECRET` | - | Google Cloud OAuth 2.0 Client Secret |
+| `GDRIVE_REDIRECT_URL` | - | OAuth redirect callback URL |
 
-# 🔌 Provider Adapter Architecture
+## S3-Compatible Gateway
 
-Storage providers are implemented through adapters.
+ODrive exposes an S3-compatible interface for client applications.
 
-Conceptually:
+Configure your standard S3 SDK (AWS SDK, Boto3, MinIO Client, etc.) with:
 
-```text
-StorageAdapter
-      │
-      ├── GoogleDriveAdapter
-      ├── OneDriveAdapter
-      ├── TelegramAdapter
-      ├── R2Adapter
-      └── S3Adapter
+```env
+AWS_ACCESS_KEY_ID=odrv_live_app_...
+AWS_SECRET_ACCESS_KEY=odrv_live_app_...
+AWS_ENDPOINT_URL=http://localhost:8090/s3
+AWS_REGION=us-east-1
+S3_USE_PATH_STYLE=true
 ```
 
-The core application communicates with the adapter interface instead of directly calling provider SDKs.
-
-This makes it possible to add or replace providers without rewriting the application core.
-
----
-
-# 🗄️ Database Agnostic
-
-ODrive is intentionally designed to avoid database vendor lock-in.
-
-The application should communicate through:
-
-```text
-Domain
-   ↓
-Repository
-   ↓
-Database Adapter
-   ↓
-Database
-```
-
-Possible implementations can include:
-
-* PostgreSQL
-* Cloudflare D1
-* Other SQL-compatible infrastructure
-* Future database adapters
-
-The database vendor should be an infrastructure decision, not a core product dependency.
-
----
-
-# ☁️ Cloudflare Workers Compatible
-
-ODrive is designed to work with serverless/edge infrastructure such as Cloudflare Workers.
-
-The architecture avoids assumptions about:
-
-* Persistent local filesystem
-* Long-running server processes
-* In-memory application state
-* Node-only runtime APIs
-
-Long-running operations are delegated to queues and background workers.
-
----
-
-# 🔐 Security
-
-Security is a core architectural concern.
-
-ODrive is designed around:
-
-* Server-side authorization
-* Workspace isolation
-* Encrypted credentials
-* Secure secret management
-* OAuth state validation
-* Rate limiting
-* IDOR protection
-* SSRF protection
-* Secure file access
-* Opaque share tokens
-* Share expiration
-* Audit logs
-* Provider credential isolation
-
-Provider credentials should never be exposed to the frontend.
-
----
-
-# 📁 Core Domain
-
-The primary domain model is:
-
-```text
-Workspace
-    │
-    ├── Drive
-    │     │
-    │     └── Connection
-    │            │
-    │            └── Provider
-    │                   │
-    │                   └── Adapter
-    │
-    ├── Transfers
-    ├── Sync
-    ├── Shares
-    └── Automations
-```
-
-### Workspace
-
-The security and tenancy boundary.
-
-### Drive
-
-A user-facing storage resource.
-
-### Connection
-
-A specific account/configuration connected to a provider.
-
-### Provider
-
-The external storage service.
-
-### Adapter
-
-The implementation that translates ODrive operations into provider-specific operations.
-
----
-
-# 🔄 Transfers
-
-ODrive provides a unified transfer layer for moving data between storage providers.
-
-Example:
-
-```text
-Google Drive
-     │
-     ▼
-Transfer Engine
-     │
-     ▼
-Cloudflare R2
-```
-
-or:
-
-```text
-OneDrive
-   │
-   ▼
-Transfer Engine
-   │
-   ▼
-Telegram
-```
-
-The Transfer Engine handles:
-
-* Background processing
-* Queueing
-* Retry
-* Idempotency
-* Provider rate limits
-* Error normalization
-* Progress tracking
-
----
-
-# 🔁 Synchronization
-
-ODrive provides a Sync Engine for keeping storage locations synchronized.
-
-Example:
-
-```text
-Google Drive
-     ↕
-ODrive Sync
-     ↕
-R2 Backup
-```
-
-The sync architecture is provider independent and relies on provider capabilities.
-
----
-
-# 🔗 Sharing
-
-Files and folders can be exposed through ODrive-controlled share links.
-
-Example:
-
-```text
-https://odrive.example/s/xxxxxxxx
-```
-
-The public URL does not expose:
-
-* Provider name
-* Connection ID
-* Provider file ID
-* OAuth credentials
-* Internal database IDs
-
-Access is resolved through the ODrive Share Gateway.
-
-```text
-Share URL
-    ↓
-Share Validation
-    ↓
-Permission Check
-    ↓
-Drive Resolution
-    ↓
-Connection Resolution
-    ↓
-Provider Adapter
-    ↓
-Secure Download / Stream
-```
-
----
-
-# ⚙️ Automation
-
-ODrive includes a lightweight storage-focused automation architecture.
-
-Automation follows:
-
-```text
-Trigger
-   ↓
-Condition
-   ↓
-Action
-   ↓
-Queue
-   ↓
-Existing Transfer / Sync Engine
-```
-
-Example:
-
-```text
-WHEN
-File Created
-
-IF
-Extension = PDF
-
-THEN
-Copy → Backup Drive
-```
-
-Possible automation actions include:
-
-* Copy
-* Move
-* Sync
-* Mirror
-* Backup
-* Archive
-* Delete
-* Notify
-
-ODrive intentionally does not attempt to become a generic workflow automation platform.
-
----
-
-# 🧩 Infrastructure Adapters
-
-The same adapter philosophy applies beyond storage.
-
-Potential abstractions include:
-
-```text
-DatabaseAdapter
-StorageAdapter
-AuthAdapter
-QueueAdapter
-CacheAdapter
-SecretAdapter
-SchedulerAdapter
-NotificationAdapter
-```
-
-This keeps infrastructure replaceable.
-
----
-
-# 🛠️ Technology Direction
-
-ODrive is designed around a modern web stack and serverless-compatible infrastructure.
-
-Primary direction:
-
-* TypeScript
-* TanStack Start
-* Cloudflare Workers
-* PostgreSQL-compatible database
-* Adapter-based architecture
-* Background queues
-* REST/API-based backend
-
-The exact infrastructure implementation should remain replaceable.
-
----
-
-# 🎯 Design Philosophy
-
-### Simple UI
-
-ODrive should not feel like enterprise storage software.
-
-The main application focuses on:
-
-```text
-Drives
-Files
-Transfers
-Shares
-Automations
-Activity
-Settings
-```
-
-### Provider Agnostic
-
-No provider should dictate the architecture.
-
-### Infrastructure Agnostic
-
-Database, storage, queue, authentication, and other infrastructure should be replaceable.
-
-### Secure by Default
-
-Credentials and internal identifiers should never leak into public interfaces.
-
-### Async by Design
-
-Long-running operations belong in queues.
-
-### Capability Driven
-
-ODrive should only expose functionality that a provider actually supports.
-
----
-
-# 🖥️ Homepage
-
-ODrive intentionally uses a minimal landing page.
-
-The homepage focuses on three things:
-
-1. What ODrive is
-2. Which storage providers it supports
-3. How to get started
-
-No unnecessary marketing sections.
-
----
-
-# 📦 Project Status
-
-ODrive is currently being developed toward its first public release.
-
-Current architectural areas include:
-
-* [x] Core architecture
-* [x] Provider abstraction
-* [x] Multi-account architecture
-* [x] Storage abstraction
-* [x] Database abstraction
-* [x] Transfer architecture
-* [x] Sync architecture
-* [x] Sharing architecture
-* [x] Automation architecture
-* [x] Admin architecture
-* [x] Cloudflare Workers compatibility
-* [x] Production hardening
-* [ ] Full provider E2E validation
-* [ ] Public launch
-
-Provider availability may differ from the architecture roadmap.
-
----
-
-# 🗺️ Roadmap
-
-Potential future areas:
-
-* Additional storage providers
-* Expanded provider capabilities
-* Team Workspaces
-* Advanced RBAC
-* Public API
-* SDK
-* CLI
-* Desktop synchronization
-* Mobile applications
-* Advanced file versioning
-* Webhooks
-* Marketplace
-* Additional automation capabilities
-
-The roadmap is intentionally secondary to keeping the core platform stable and portable.
-
----
-
-# 🤝 Contributing
-
-Contributions are welcome.
-
-When adding a new provider, follow the adapter architecture.
-
-A provider implementation should not introduce provider-specific assumptions into the ODrive core.
-
-Prefer:
-
-```text
-New Provider
-     ↓
-Provider Adapter
-     ↓
-Existing ODrive Core
-```
-
-instead of:
-
-```text
-New Provider
-     ↓
-Modify Core Everywhere
-```
-
----
-
-# 📄 License
-
-License information will be added before the public release.
-
----
-
-# 👤 Creator
-
-ODrive is created by **[Fajar Tri](https://www.linkedin.com/in/fajartri)** built with **[Lovable](https://lovable.dev/invite/VG98I04)** and small task using ChatGPT.
-
-About me: A T-Shaped professional with deep expertise in SEO since 2011, complemented by broad knowledge across digital marketing, vibe coding, PHP native programmer (2008-2011) and related disciplines.
-
-**Need a help/custom?**
-contact me at [Marvia](https://marvia.id)
-
----
-
-## ODrive
-
-**One Drive. Every Storage.**
-
-Built with a simple idea:
-
-> Your files shouldn't care which storage provider you use.
+Supported operations:
+- `PUT /s3/{bucket}/{key}`: Upload an object with zero-copy stream relay.
+- `GET /s3/{bucket}/{key}`: Download an object with support for HTTP Range headers.
+- `HEAD /s3/{bucket}/{key}`: Query metadata, content length, and ETag.
+- `DELETE /s3/{bucket}/{key}`: Remove an object from the virtual file system.
+
+## REST API Overview
+
+Authentication: Session cookie (via Web UI) or `X-Omni-Key: <api_key>` header.
+
+### Endpoints
+
+- `GET /health` or `GET /api/v1/health`: System health status and version.
+- `POST /api/v1/auth/login`: Authenticate and obtain session cookie.
+- `POST /api/v1/auth/logout`: Destroy active session.
+- `GET /api/v1/drives`: List configured virtual drives.
+- `POST /api/v1/drives`: Create a virtual drive mapped to a connection.
+- `GET /api/v1/connections`: List storage provider connections.
+- `POST /api/v1/connections`: Add a storage provider connection.
+- `POST /api/v1/connections/{id}/default`: Set connection as primary default.
+- `GET /api/v1/files?drive_id={id}`: List files and folders.
+- `POST /api/v1/files/upload?drive_id={id}`: Multipart streaming file upload.
+- `GET /api/v1/files/download/{file_or_path}?drive_id={id}`: Stream file download.
+- `DELETE /api/v1/files/{file_id}?drive_id={id}`: Delete a file.
+- `GET /api/v1/shares`: List public share links.
+- `POST /api/v1/shares`: Create a public download share token.
+- `GET /s/{token}`: Public download link (no authentication required).
+- `GET /api/v1/keys`: List service API keys.
+- `POST /api/v1/keys`: Generate a new scoped service API key.
+- `DELETE /api/v1/keys/{id}`: Revoke an API key.
 
 ## Development
 
-Prefer working locally? You need Node.js and npm — [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating).
+Run backend and frontend independently during development:
 
-```sh
-git clone <this-repository-url>
-cd <repository-name>
-npm i
+```bash
+# Terminal 1: Run frontend dev server
+cd ui
 npm run dev
+
+# Terminal 2: Run Go backend with SQLite
+go run ./cmd/odrive -addr :8090 -db ./data/dev.db
 ```
+
+Run test suite:
+
+```bash
+go test -v ./...
+```
+
+## License
+
+This project is licensed under the MIT License.

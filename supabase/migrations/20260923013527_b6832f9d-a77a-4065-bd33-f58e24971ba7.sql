@@ -1,1 +1,0 @@
-DROP FUNCTION IF EXISTS public.create_workspace_for_current_user(text);
